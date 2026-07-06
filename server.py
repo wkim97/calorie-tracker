@@ -166,7 +166,7 @@ def lan_ip():
 
 def main():
     try:
-        # 0.0.0.0 — 폰(Tailscale/같은 Wi-Fi)에서도 접속할 수 있게 모든 인터페이스에 연다
+        # 0.0.0.0 — 같은 Wi-Fi의 다른 기기에서도 접속할 수 있게 모든 인터페이스에 연다
         server = HTTPServer(("0.0.0.0", PORT), Handler)
     except OSError:
         print(f"이미 실행 중입니다 → {URL}")
@@ -175,7 +175,6 @@ def main():
     ip = lan_ip()
     if ip:
         print(f"같은 Wi-Fi의 폰에서: http://{ip}:{PORT}")
-    print(f"Tailscale 연결 후 폰에서: http://<맥의 Tailscale IP>:{PORT}")
     print(f"기록 파일: {DATA_FILE}")
     print("종료: Ctrl+C")
     try:
