@@ -1,0 +1,9 @@
+# 비밀·개인 데이터 — 절대 커밋 금지
+config.json
+data.json
+data.json.tmp
+
+# 로컬 전용
+com.woojae.calorie-tracker.plist
+*.log
+.DS_Store
