@@ -385,7 +385,7 @@
   <div class="ai-row">
     <button class="ai-btn" id="aiNameBtn">🤖 이름으로 채우기</button>
     <button class="ai-btn" id="aiPhotoBtn">📷 사진으로 채우기</button>
-    <input type="file" id="aiPhotoInput" accept="image/*" style="display:none">
+    <input type="file" id="aiPhotoInput" accept="image/*" multiple style="display:none">
   </div>
   <div class="field-row">
     <div class="field">
@@ -558,8 +558,8 @@
 <!-- 사진 분석 코멘트 시트 -->
 <div class="sheet" id="aiPhotoSheet">
   <h3>📷 사진 분석</h3>
-  <img id="aiPreview" alt="음식 사진 미리보기"
-       style="width:100%; max-height:200px; object-fit:cover; border-radius:12px; margin-bottom:12px;">
+  <div id="aiPreviewWrap" style="display:flex; gap:8px; margin-bottom:12px;"></div>
+  <div style="font-size:11px; color:var(--sub); margin:-6px 0 10px;">💡 영양성분표 사진과 실물 사진을 같이 올리면 더 정확해요 (최대 3장)</div>
   <div class="field">
     <label>코멘트 · 선택 (실제 먹은 양이 다르면 알려주세요)</label>
     <textarea id="aiComment" rows="2" placeholder="예: 밥은 반만 먹음 / 또띠야는 안 먹음 / 계란 하나 추가"
@@ -1193,6 +1193,7 @@
     '일반적인 1인분(1개/1팩/1그릇) 기준 영양 정보를 추정해라. ' +
     '브랜드 제품명이 명확하면 실제 제품 영양성분표 기준으로 답해라. ' +
     '사용자 코멘트가 있으면 실제 섭취량을 그에 맞게 조정해서 계산해라. ' +
+    '영양성분표 사진이 포함되어 있으면 그 수치를 우선 사용하고, 실물 사진과 코멘트로 실제 섭취량을 추정해 곱해라. ' +
     '코멘트가 사진과 다르면 코멘트가 우선이다. 반드시 아래 JSON 형식으로만 응답해라:\n' +
     '{"name": "간결한 한국어 음식 이름", "kcal": 숫자, "protein": 숫자(g), ' +
     '"carbs": 숫자(g), "fat": 숫자(g), "note": "기준량·코멘트 반영 내용 한 줄"}';
@@ -1221,7 +1222,7 @@
       if (body.comment) lines.push('사용자 코멘트(실제 섭취량에 반영할 것): ' + body.comment);
       if (!lines.length) lines.push('사진 속 음식의 영양 정보를 추정해줘.');
       var content = [{ type: 'text', text: lines.join('\n') }];
-      if (body.image) content.push({ type: 'image_url', image_url: { url: body.image } });
+      (body.images || []).forEach(function(u){ content.push({ type: 'image_url', image_url: { url: u } }); });
       p = fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -1251,45 +1252,60 @@
   });
   $('aiPhotoBtn').addEventListener('click', function(){ $('aiPhotoInput').click(); });
 
-  // 사진 선택 → 미리보기 + 코멘트 입력 시트 → 분석
-  var pendingImage = null;
+  // 사진 선택(여러 장 가능) → 미리보기 + 코멘트 입력 시트 → 분석
+  var pendingImages = [];
+  function showPhotoSheet(images){
+    if (!images.length) { toast('⚠️ 이미지를 읽을 수 없어요'); return; }
+    pendingImages = images;
+    var wrap = $('aiPreviewWrap');
+    wrap.innerHTML = '';
+    images.forEach(function(src){
+      var im = document.createElement('img');
+      im.src = src;
+      im.style.cssText = 'flex:1; min-width:0; max-height:160px; object-fit:cover; border-radius:12px;';
+      wrap.appendChild(im);
+    });
+    $('aiComment').value = '';
+    $('aiPhotoSheet').classList.add('open');
+  }
   $('aiPhotoInput').addEventListener('change', function(){
-    var file = this.files[0];
+    var files = Array.prototype.slice.call(this.files, 0, 3);
     this.value = '';
-    if (!file) return;
-    // 캔버스로 축소해서(최대 1024px) 전송량을 줄인다
-    var img = new Image();
-    img.onload = function(){
-      var scale = Math.min(1, 1024 / Math.max(img.width, img.height));
-      var canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      pendingImage = canvas.toDataURL('image/jpeg', 0.85);
-      URL.revokeObjectURL(img.src);
-      $('aiPreview').src = pendingImage;
-      $('aiComment').value = '';
-      $('aiPhotoSheet').classList.add('open');
-    };
-    img.onerror = function(){
-      URL.revokeObjectURL(img.src);
-      toast('⚠️ 이미지를 읽을 수 없어요');
-    };
-    img.src = URL.createObjectURL(file);
+    if (!files.length) return;
+    var results = [], done = 0;
+    files.forEach(function(file, idx){
+      // 캔버스로 축소해서(최대 1024px) 전송량을 줄인다
+      var img = new Image();
+      function finish(){
+        URL.revokeObjectURL(img.src);
+        if (++done === files.length) showPhotoSheet(results.filter(Boolean));
+      }
+      img.onload = function(){
+        var scale = Math.min(1, 1024 / Math.max(img.width, img.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        results[idx] = canvas.toDataURL('image/jpeg', 0.85);
+        finish();
+      };
+      img.onerror = finish;
+      img.src = URL.createObjectURL(file);
+    });
   });
   $('aiPhotoCancelBtn').addEventListener('click', function(){
-    pendingImage = null;
+    pendingImages = [];
     $('aiPhotoSheet').classList.remove('open'); // 기록 추가 시트는 그대로 둔다
   });
   $('aiPhotoGoBtn').addEventListener('click', function(){
-    if (!pendingImage) return;
+    if (!pendingImages.length) return;
     var comment = $('aiComment').value.trim();
     aiRequest({
       name: $('inName').value.trim() || null,
-      image: pendingImage,
+      images: pendingImages,
       comment: comment || null
     });
-    pendingImage = null;
+    pendingImages = [];
     $('aiPhotoSheet').classList.remove('open');
   });
 

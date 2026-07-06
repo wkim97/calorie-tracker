@@ -23,6 +23,8 @@ AI_SYSTEM_PROMPT = (
     "사용자 코멘트가 있으면 실제 섭취량을 그에 맞게 조정해서 계산해라 "
     "(예: '밥은 반만 먹음' → 밥 분량 절반만 합산, '또띠야는 안 먹음' → 제외, "
     "'계란 하나 추가' → 추가분 합산). 코멘트가 사진과 다르면 코멘트가 우선이다. "
+    "영양성분표 사진이 포함되어 있으면 그 수치를 우선 사용하고, "
+    "실물 사진과 코멘트로 실제 섭취량을 추정해 곱해라. "
     "반드시 아래 JSON 형식으로만 응답해라:\n"
     '{"name": "간결한 한국어 음식 이름", "kcal": 숫자, "protein": 숫자(g), '
     '"carbs": 숫자(g), "fat": 숫자(g), "note": "기준량·코멘트 반영 내용 한 줄"}'
@@ -37,7 +39,7 @@ def load_config():
         return {}
 
 
-def call_openai(name, image, comment=None):
+def call_openai(name, images, comment=None):
     config = load_config()
     api_key = config.get("openai_api_key")
     if not api_key:
@@ -51,8 +53,8 @@ def call_openai(name, image, comment=None):
     if not lines:
         lines.append("사진 속 음식의 영양 정보를 추정해줘.")
     content = [{"type": "text", "text": "\n".join(lines)}]
-    if image:
-        content.append({"type": "image_url", "image_url": {"url": image}})
+    for url in images or []:
+        content.append({"type": "image_url", "image_url": {"url": url}})
 
     payload = {
         "model": config.get("model", "gpt-5.4"),
@@ -112,7 +114,8 @@ class Handler(SimpleHTTPRequestHandler):
                 req = json.loads(self.rfile.read(length))
             except ValueError:
                 req = {}
-            result = call_openai(req.get("name"), req.get("image"), req.get("comment"))
+            images = req.get("images") or ([req["image"]] if req.get("image") else [])
+            result = call_openai(req.get("name"), images, req.get("comment"))
             body = json.dumps(result, ensure_ascii=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
