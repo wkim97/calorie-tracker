@@ -387,6 +387,9 @@
     <button class="ai-btn" id="aiPhotoBtn">📷 사진으로 채우기</button>
     <input type="file" id="aiPhotoInput" accept="image/*" multiple style="display:none">
   </div>
+  <div class="ai-row" style="margin-top:-8px;">
+    <button class="ai-btn" id="aiMenuBtn" style="flex:1;">🍱 급식표에서 고르기</button>
+  </div>
   <div class="field-row">
     <div class="field">
       <label>칼로리 (kcal)</label>
@@ -552,6 +555,26 @@
   <div class="sheet-actions">
     <button class="btn btn-ghost" id="bodyCancelBtn">취소</button>
     <button class="btn btn-primary" id="bodySaveBtn">저장</button>
+  </div>
+</div>
+
+<!-- 급식표 입력 시트 -->
+<div class="sheet" id="menuSheet">
+  <h3>🍱 급식표에서 고르기</h3>
+  <div class="field">
+    <label>급식표 붙여넣기 (여러 코스 전체)</label>
+    <textarea id="menuText" rows="5" placeholder="[COURSE1] ...&#10;859kcal(단백질 26g) ...&#10;[COURSE2] ...&#10;붙여넣으세요"
+      style="width:100%; background:var(--card2); border:1px solid #2e3340; border-radius:12px;
+             padding:12px 14px; color:var(--text); font-size:13px; outline:none; resize:none;
+             font-family:inherit;"></textarea>
+  </div>
+  <div class="field">
+    <label>어떤 걸 어떻게 먹었나 (코스 번호 + 조정)</label>
+    <input type="text" id="menuChoice" placeholder="예: 2번, 고기 50% 추가, 국물 남김, 밥 2/3" autocomplete="off">
+  </div>
+  <div class="sheet-actions">
+    <button class="btn btn-ghost" id="menuCancelBtn">취소</button>
+    <button class="btn btn-primary" id="menuGoBtn">🤖 계산하기</button>
   </div>
 </div>
 
@@ -1044,6 +1067,7 @@
     $('bodySheet').classList.remove('open');
     $('planSheet').classList.remove('open');
     $('setSheet').classList.remove('open');
+    $('menuSheet').classList.remove('open');
   }
 
   // 설정: API 키 + 데이터 내보내기/가져오기
@@ -1172,8 +1196,10 @@
   function aiBusy(busy){
     $('aiNameBtn').disabled = busy;
     $('aiPhotoBtn').disabled = busy;
+    $('aiMenuBtn').disabled = busy;
     $('aiNameBtn').textContent = busy ? '⏳ 분석 중…' : '🤖 이름으로 채우기';
     $('aiPhotoBtn').textContent = busy ? '⏳ 분석 중…' : '📷 사진으로 채우기';
+    $('aiMenuBtn').textContent = busy ? '⏳ 계산 중…' : '🍱 급식표에서 고르기';
   }
   function applyAI(res){
     aiBusy(false);
@@ -1201,6 +1227,20 @@
     '{"name": "간결한 한국어 음식 이름", "kcal": 숫자, "protein": 숫자(g), ' +
     '"carbs": 숫자(g), "fat": 숫자(g), "note": "기준량·코멘트 반영 내용 한 줄"}';
 
+  // 급식표 전용 프롬프트 — 표에 적힌 kcal·단백질을 신뢰하고 조정만 계산
+  var MENU_PROMPT =
+    '너는 급식 영양 계산 도우미다. 사용자가 급식표(여러 코스와 각 칼로리·단백질·나트륨)와 ' +
+    '"몇 번 코스를 어떻게 먹었는지"를 준다. 규칙:\n' +
+    '1) 사용자가 고른 코스의 급식표 kcal와 단백질(g)을 신뢰의 기준으로 삼아라. 임의로 부풀리거나 줄이지 마라.\n' +
+    '2) 급식표에 없는 탄수/지방은 그 kcal·단백질에서 역산해 추정해라 (단백질 4kcal/g, 나머지 kcal를 탄수·지방으로 배분).\n' +
+    '3) 조정 지시("고기 50% 추가", "밥 2/3", "국물 남김", "튀김 뺌")를 반영하되 상식적으로만 계산해라. ' +
+    '고기 추가는 단백질·지방·kcal만 올리고 탄수는 그대로. 밥 줄이면 탄수·kcal만 내려라. ' +
+    '국물 남기면 나트륨과 소량의 지방·kcal만 줄여라. 지시가 없으면 급식표 그대로 써라.\n' +
+    '4) 절대 과대추정하지 마라. 최종 kcal는 급식표 기준값에서 조정분만큼만 벗어나야 한다.\n' +
+    '반드시 아래 JSON으로만 응답해라:\n' +
+    '{"name": "간결한 한국어 음식 이름", "kcal": 숫자, "protein": 숫자(g), ' +
+    '"carbs": 숫자(g), "fat": 숫자(g), "note": "선택 코스와 조정 반영 내용 한 줄"}';
+
   function aiRequest(body){
     var p;
     if (API) {
@@ -1220,19 +1260,26 @@
         return;
       }
       aiBusy(true);
-      var lines = [];
-      if (body.name) lines.push('음식: ' + body.name);
-      if (body.comment) lines.push('사용자 코멘트(실제 섭취량에 반영할 것): ' + body.comment);
-      if (!lines.length) lines.push('사진 속 음식의 영양 정보를 추정해줘.');
-      var content = [{ type: 'text', text: lines.join('\n') }];
-      (body.images || []).forEach(function(u){ content.push({ type: 'image_url', image_url: { url: u } }); });
+      var sysPrompt = AI_PROMPT, content;
+      if (body.menu) {
+        // 급식표 모드
+        sysPrompt = MENU_PROMPT;
+        content = [{ type: 'text', text: '급식표:\n' + body.menu + '\n\n먹은 내용: ' + (body.choice || '') }];
+      } else {
+        var lines = [];
+        if (body.name) lines.push('음식: ' + body.name);
+        if (body.comment) lines.push('사용자 코멘트(실제 섭취량에 반영할 것): ' + body.comment);
+        if (!lines.length) lines.push('사진 속 음식의 영양 정보를 추정해줘.');
+        content = [{ type: 'text', text: lines.join('\n') }];
+        (body.images || []).forEach(function(u){ content.push({ type: 'image_url', image_url: { url: u } }); });
+      }
       p = fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
         body: JSON.stringify({
           model: 'gpt-5.4',
           messages: [
-            { role: 'system', content: AI_PROMPT },
+            { role: 'system', content: sysPrompt },
             { role: 'user', content: content }
           ],
           response_format: { type: 'json_object' }
@@ -1254,6 +1301,25 @@
     aiRequest({ name: name });
   });
   $('aiPhotoBtn').addEventListener('click', function(){ $('aiPhotoInput').click(); });
+
+  // 급식표 모드
+  $('aiMenuBtn').addEventListener('click', function(){
+    $('menuText').value = '';
+    $('menuChoice').value = '';
+    openSheet('menuSheet');
+    setTimeout(function(){ $('menuText').focus(); }, 250);
+  });
+  $('menuCancelBtn').addEventListener('click', function(){
+    $('menuSheet').classList.remove('open'); // 기록 추가 시트는 유지
+  });
+  $('menuGoBtn').addEventListener('click', function(){
+    var menu = $('menuText').value.trim();
+    var choice = $('menuChoice').value.trim();
+    if (!menu) { $('menuText').focus(); toast('급식표를 붙여넣으세요'); return; }
+    if (!choice) { $('menuChoice').focus(); toast('몇 번을 먹었는지 적어주세요'); return; }
+    aiRequest({ menu: menu, choice: choice });
+    $('menuSheet').classList.remove('open');
+  });
 
   // 사진 선택(여러 장 가능) → 미리보기 + 코멘트 입력 시트 → 분석
   var pendingImages = [];

@@ -43,27 +43,47 @@ def load_config():
         return {}
 
 
-def call_openai(name, images, comment=None):
+MENU_PROMPT = (
+    "너는 급식 영양 계산 도우미다. 사용자가 급식표(여러 코스와 각 칼로리·단백질·나트륨)와 "
+    "'몇 번 코스를 어떻게 먹었는지'를 준다. 규칙:\n"
+    "1) 사용자가 고른 코스의 급식표 kcal와 단백질(g)을 신뢰의 기준으로 삼아라. 임의로 부풀리거나 줄이지 마라.\n"
+    "2) 급식표에 없는 탄수/지방은 그 kcal·단백질에서 역산해 추정해라 (단백질 4kcal/g, 나머지 kcal를 탄수·지방으로 배분).\n"
+    "3) 조정 지시('고기 50% 추가', '밥 2/3', '국물 남김', '튀김 뺌')를 반영하되 상식적으로만 계산해라. "
+    "고기 추가는 단백질·지방·kcal만 올리고 탄수는 그대로. 밥 줄이면 탄수·kcal만 내려라. "
+    "국물 남기면 나트륨과 소량의 지방·kcal만 줄여라. 지시가 없으면 급식표 그대로 써라.\n"
+    "4) 절대 과대추정하지 마라. 최종 kcal는 급식표 기준값에서 조정분만큼만 벗어나야 한다.\n"
+    "반드시 아래 JSON으로만 응답해라:\n"
+    '{"name": "간결한 한국어 음식 이름", "kcal": 숫자, "protein": 숫자(g), '
+    '"carbs": 숫자(g), "fat": 숫자(g), "note": "선택 코스와 조정 반영 내용 한 줄"}'
+)
+
+
+def call_openai(name, images, comment=None, menu=None, choice=None):
     config = load_config()
     api_key = config.get("openai_api_key")
     if not api_key:
         return {"error": "config.json에 openai_api_key가 없습니다"}
 
-    lines = []
-    if name:
-        lines.append(f"음식: {name}")
-    if comment:
-        lines.append(f"사용자 코멘트(실제 섭취량에 반영할 것): {comment}")
-    if not lines:
-        lines.append("사진 속 음식의 영양 정보를 추정해줘.")
-    content = [{"type": "text", "text": "\n".join(lines)}]
-    for url in images or []:
-        content.append({"type": "image_url", "image_url": {"url": url}})
+    if menu:
+        system_prompt = MENU_PROMPT
+        content = [{"type": "text", "text": f"급식표:\n{menu}\n\n먹은 내용: {choice or ''}"}]
+    else:
+        system_prompt = AI_SYSTEM_PROMPT
+        lines = []
+        if name:
+            lines.append(f"음식: {name}")
+        if comment:
+            lines.append(f"사용자 코멘트(실제 섭취량에 반영할 것): {comment}")
+        if not lines:
+            lines.append("사진 속 음식의 영양 정보를 추정해줘.")
+        content = [{"type": "text", "text": "\n".join(lines)}]
+        for url in images or []:
+            content.append({"type": "image_url", "image_url": {"url": url}})
 
     payload = {
         "model": config.get("model", "gpt-5.4"),
         "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ],
         "response_format": {"type": "json_object"},
@@ -119,7 +139,8 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 req = {}
             images = req.get("images") or ([req["image"]] if req.get("image") else [])
-            result = call_openai(req.get("name"), images, req.get("comment"))
+            result = call_openai(req.get("name"), images, req.get("comment"),
+                                 req.get("menu"), req.get("choice"))
             body = json.dumps(result, ensure_ascii=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
